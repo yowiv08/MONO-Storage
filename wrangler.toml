@@ -1,0 +1,32 @@
+name = "mono-storage"
+main = "worker/index.ts"
+compatibility_date = "2026-10-28"
+workers_dev = true
+preview_urls = false
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+STORAGE_BUCKETS = '[{"name":"workspace","binding":"STORAGE","description":"默认存储桶"}]'
+# Optional comma-separated origins for browser API clients. No wildcard is accepted.
+# CORS_ORIGINS = "https://your-app.example.com"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "mono-storage"
+
+[[durable_objects.bindings]]
+name = "LOGIN_RATE_LIMITER"
+class_name = "LoginRateLimiter"
+
+[[migrations]]
+tag = "login-rate-limit-v1"
+new_sqlite_classes = ["LoginRateLimiter"]
+
+# Add additional buckets here and in STORAGE_BUCKETS if you need them.
+# [[r2_buckets]]
+# binding = "ARCHIVE"
+# bucket_name = "mono-archive"

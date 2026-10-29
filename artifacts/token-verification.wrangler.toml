@@ -1,0 +1,28 @@
+name = "mono-token-verification"
+main = "../worker/index.ts"
+compatibility_date = "2026-10-28"
+
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+LOCAL_DEVELOPMENT = "true"
+STORAGE_BUCKETS = '[{"name":"workspace","binding":"STORAGE","description":"权限验证工作文件"},{"name":"archive","binding":"ARCHIVE","description":"权限验证归档文件"}]'
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "mono-token-verification-primary"
+
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "mono-token-verification-archive"
+
+[[durable_objects.bindings]]
+name = "LOGIN_RATE_LIMITER"
+class_name = "LoginRateLimiter"
+
+[[migrations]]
+tag = "login-rate-limit-v1"
+new_sqlite_classes = ["LoginRateLimiter"]

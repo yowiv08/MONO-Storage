@@ -1,0 +1,4 @@
+# Only applied by local Wrangler development. Never put this in production variables.
+LOCAL_DEVELOPMENT="true"
+# To test the deployment setup flow locally, set LOCAL_DEVELOPMENT="false".
+# SESSION_SECRET="a-random-secret-with-at-least-32-characters"
