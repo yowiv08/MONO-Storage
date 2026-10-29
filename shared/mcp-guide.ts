@@ -26,6 +26,7 @@ function apiReference(): string {
 | 覆盖文件 | 同上传，明确添加 overwrite=true；也可传 If-Match 的文件 ETag | write |
 | 删除文件 | DELETE /api/buckets/{bucket}/object?key=… | delete |
 | 批量删除 | DELETE /api/buckets/{bucket}/objects，JSON {"keys":["完整路径"]}，最多 100 个 | delete |
+| 打包下载 | POST /api/buckets/{bucket}/archive，JSON {"keys":["完整路径"]}，返回 ZIP | read |
 | 创建目录 | POST /api/buckets/{bucket}/folders，JSON {"key":"目录/"} | create_folder |
 | 删除空目录 | DELETE /api/buckets/{bucket}/folders?key=目录%2F | delete_folder |
 | 创建分享 | POST /api/buckets/{bucket}/shares，JSON {"key":"完整路径","expiresIn":604800} | read + share |
@@ -35,6 +36,7 @@ function apiReference(): string {
 统计可传 prefix 限定范围：目录使用以 / 结尾的完整路径，包含该目录及全部子目录；省略或传空 prefix 时统计整个授权桶。返回当前页增量 objectCount、totalBytes、truncated 和 cursor；保持同一 prefix，跨页累加到 truncated=false 才是范围内的完整文件总数与总大小。目录标记和系统对象不计入；单文件 Token 只统计绑定文件，前缀不匹配时返回零。
 原 HTTP API 简单上传上限 90 MiB，PUT 请求体为原始文件字节，设置对应 Content-Type；元数据通过 X-Object-Meta-* 请求头传递。
 读取支持 Range: bytes=start-end、HEAD 和 If-None-Match。metadata=true 返回 JSON，其中 etag 可用于条件覆盖。
+打包下载最多选择 500 个文件，原始文件总大小不超过 512 MiB；请求 JSON 最多 1 MiB。ZIP 保留完整相对目录结构，对解压不兼容的文件名字符使用百分号转义；单文件 Token 只能打包绑定文件。文件缺失、版本变化或路径发生解压冲突时返回错误；传输失败时应丢弃未完成的压缩包。该功能通过原 HTTP API 调用。
 文件路径不能以 / 开头，目录必须以 / 结尾，不接受空目录、.、.. 或受保护的 _mono/ 系统路径。
 
 ### 原 API 的大文件分片

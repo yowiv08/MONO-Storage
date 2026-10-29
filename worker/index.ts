@@ -9,6 +9,8 @@ import { statsCursor, storageStatsPage } from './storage-stats.ts'
 import { DEFAULT_LOGIN_RATE_LIMIT, normalizeLoginRateLimit, type LoginRateLimit } from '../shared/login-rate-limit.ts'
 import { enforceLoginRateLimit, LoginRateLimitError } from './login-rate-limit.ts'
 import { listActiveSharesPage } from './share-list.ts'
+import { archiveKeys, archiveResponse } from './archive.ts'
+import { MAX_ARCHIVE_REQUEST_BYTES } from '../shared/batch-files.ts'
 
 export { LoginRateLimiter } from './login-rate-limit.ts'
 
@@ -175,10 +177,33 @@ function serializeObject(item: R2Object) {
   }
 }
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-  if (Number(request.headers.get('Content-Length') || 0) > 32 * 1024) throw new ApiError(413, 'BODY_TOO_LARGE', '请求内容过大。')
-  const text = await request.text()
-  if (encoder.encode(text).length > 32 * 1024) throw new ApiError(413, 'BODY_TOO_LARGE', '请求内容过大。')
+async function readJson(request: Request, maxBytes = 32 * 1024): Promise<Record<string, unknown>> {
+  if (Number(request.headers.get('Content-Length') || 0) > maxBytes) {
+    throw new ApiError(413, 'BODY_TOO_LARGE', '请求内容过大。')
+  }
+  let text = ''
+  if (request.body) {
+    const reader = request.body.getReader()
+    const decoder = new TextDecoder()
+    let length = 0
+    const abort = () => { void reader.cancel().catch(() => undefined) }
+    request.signal.addEventListener('abort', abort, { once: true })
+    try {
+      while (true) {
+        if (request.signal.aborted) throw new DOMException('请求已取消。', 'AbortError')
+        const chunk = await reader.read()
+        if (request.signal.aborted) throw new DOMException('请求已取消。', 'AbortError')
+        if (chunk.done) { text += decoder.decode(); break }
+        length += chunk.value.byteLength
+        if (length > maxBytes) throw new ApiError(413, 'BODY_TOO_LARGE', '请求内容过大。')
+        text += decoder.decode(chunk.value, { stream: true })
+      }
+    } finally {
+      request.signal.removeEventListener('abort', abort)
+      reader.releaseLock()
+    }
+  }
+  if (encoder.encode(text).length > maxBytes) throw new ApiError(413, 'BODY_TOO_LARGE', '请求内容过大。')
   try {
     const value = JSON.parse(text)
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
@@ -500,11 +525,18 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     const visible = buckets(env).filter(bucket => principal.type === 'admin' || principal.token.scope.type === 'all' || principal.token.scope.bucket === bucket.name)
     return json({ buckets: visible.map(bucket => ({ name: bucket.name, description: bucket.description })), capabilities: { simpleUploadLimit: SIMPLE_UPLOAD_LIMIT, partSize: PART_SIZE, maxObjectSize: MAX_OBJECT_SIZE }, ...(principal.type === 'admin' ? { config: { adminPath: config.adminPath, displayName: config.displayName } } : {}) })
   }
-  const match = /^\/api\/buckets\/([a-z0-9_-]+)\/(objects|object|folders|uploads|shares|stats)(?:\/(part|complete|abort))?$/.exec(path)
+  const match = /^\/api\/buckets\/([a-z0-9_-]+)\/(objects|object|folders|uploads|shares|stats|archive)(?:\/(part|complete|abort))?$/.exec(path)
   if (!match) throw new ApiError(404, 'NOT_FOUND', 'API 路径不存在。')
   const [, name, resource, action] = match
   if (principal.type === 'token') assertTokenBucket(principal.token, name)
   const bucket = getBucket(env, name)
+
+  if (resource === 'archive' && !action && request.method === 'POST') {
+    if (url.searchParams.size) throw new ApiError(400, 'INVALID_ARCHIVE_QUERY', '打包下载只接受 JSON 文件列表。')
+    const keys = archiveKeys(await readJson(request, MAX_ARCHIVE_REQUEST_BYTES), value => publicObjectKey(value))
+    for (const key of keys) authorize(principal, 'read', name, key)
+    return archiveResponse(bucket, keys, name, request.signal)
+  }
 
   if (resource === 'stats' && !action && request.method === 'GET') {
     const exactFile = principal.type === 'token' && principal.token.scope.type === 'file' ? principal.token.scope.key : undefined

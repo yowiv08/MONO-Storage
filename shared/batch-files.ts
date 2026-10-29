@@ -1,0 +1,3 @@
+export const MAX_ARCHIVE_FILES = 500
+export const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+export const MAX_ARCHIVE_REQUEST_BYTES = 1024 * 1024
