@@ -14,6 +14,7 @@ export function baseName(key: string): string {
 }
 
 export function fileKind(key: string, contentType = ''): 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'file' {
+  contentType = contentType.split(';', 1)[0].trim().toLowerCase()
   if (contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|svg|ico)$/i.test(key)) return 'image'
   if (contentType.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(key)) return 'video'
   if (contentType.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)$/i.test(key)) return 'audio'

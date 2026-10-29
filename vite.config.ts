@@ -1,9 +1,40 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+import { readFile, readdir } from 'node:fs/promises'
+import { extname, join } from 'node:path'
 
 const workerOrigin = process.env.MONO_WORKER_ORIGIN || 'http://127.0.0.1:8787'
 const sourceRoot = fileURLToPath(new URL('./', import.meta.url)).replaceAll('\\', '/')
+const publicModules = ['main', 'auth-views', 'public-sharing', 'common-components', 'public-api', 'theme', 'format', 'share-link', 'styles', 'document-preview', 'preview-data', 'preview-kind', 'preview-links', 'preview-html', 'preview-text', 'preview-docx', 'docx-worker', 'preview-archive', 'preview-pdf', 'pdf-runtime', 'preview-workbook', 'workbook-data', 'workbook-model', 'workbook-worker']
+
+function pdfAssets(): Plugin {
+  const root = fileURLToPath(new URL('./node_modules/pdfjs-dist/', import.meta.url))
+  const folders = ['cmaps', 'standard_fonts', 'wasm']
+  return {
+    name: 'local-pdf-assets',
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        const path = (request.url || '').split(/[?#]/, 1)[0]
+        if (!path.startsWith('/assets/pdfjs/')) return next()
+        const relative = path.slice('/assets/pdfjs/'.length)
+        if (!['GET', 'HEAD'].includes(request.method || '') || !/^(cmaps|standard_fonts|wasm)\/[a-zA-Z0-9_.-]+$/.test(relative)) { response.statusCode = 404; response.end(); return }
+        try {
+          const data = await readFile(join(root, relative))
+          const type = ({ '.wasm': 'application/wasm', '.js': 'application/javascript', '.mjs': 'application/javascript', '.ttf': 'font/ttf', '.otf': 'font/otf' } as Record<string, string>)[extname(relative)] || 'application/octet-stream'
+          response.setHeader('Content-Type', type); response.setHeader('Content-Length', data.byteLength); response.setHeader('X-Content-Type-Options', 'nosniff')
+          response.end(request.method === 'HEAD' ? undefined : data)
+        } catch { response.statusCode = 404; response.end() }
+      })
+    },
+    async generateBundle() {
+      for (const folder of folders) {
+        const entries = await readdir(join(root, folder), { withFileTypes: true })
+        for (const entry of entries) if (entry.isFile()) this.emitFile({ type: 'asset', fileName: `assets/pdfjs/${folder}/${entry.name}`, source: await readFile(join(root, folder, entry.name)) })
+      }
+    },
+  }
+}
 
 // Development pages follow the Worker's access rules.
 function privatePanelRoutes(): Plugin {
@@ -16,7 +47,6 @@ function privatePanelRoutes(): Plugin {
           response.statusCode = 404; response.setHeader('Cache-Control', 'no-store'); response.end(); return
         }
         const path = new URL(request.url || '/', workerOrigin).pathname
-        const publicModules = ['main', 'auth-views', 'public-sharing', 'common-components', 'public-api', 'theme', 'format', 'share-link', 'styles']
         const protectedSource = /^\/api\/panel-assets\/dev\/(src|shared)\/([a-zA-Z0-9_-]+\.(?:ts|tsx))$/.exec(path)
         if (path === '/api/panel' || path === '/api/panel-assets/console-development.js' || protectedSource) {
           try {
@@ -70,7 +100,7 @@ function privatePanelRoutes(): Plugin {
 
 export default defineConfig({
   appType: 'mpa',
-  plugins: [privatePanelRoutes(), react(), {
+  plugins: [pdfAssets(), privatePanelRoutes(), react(), {
     name: 'private-panel-manifest',
     generateBundle(_options, bundle) {
       const entry = Object.values(bundle).find(item => item.type === 'chunk' && item.isEntry && item.name === 'console')
@@ -88,9 +118,12 @@ export default defineConfig({
         chunkFileNames: chunk => chunk.name === 'console-private' ? 'api/panel-assets/[name]-[hash].js' : 'assets/[name]-[hash].js',
         manualChunks(id) {
           const normalized = id.replaceAll('\\', '/')
-          if (normalized.includes('/node_modules/')) return 'vendor'
+          if (normalized.includes('/node_modules/pdfjs-dist/')) return 'document-pdf-engine'
+          if (normalized.includes('/node_modules/')) {
+            if (/\/(?:react(?:-dom)?|scheduler|lucide-react)\//.test(normalized)) return 'vendor'
+            return
+          }
           if (!normalized.startsWith(sourceRoot) || !/\/(?:src|shared)\//.test(normalized)) return
-          const publicModules = ['main', 'auth-views', 'public-sharing', 'common-components', 'public-api', 'theme', 'format', 'share-link', 'styles']
           if (!publicModules.some(name => normalized.endsWith(`/src/${name}.tsx`) || normalized.endsWith(`/src/${name}.ts`) || normalized.endsWith(`/src/${name}.css`)) && !normalized.endsWith('/src/console-entry.tsx')) return 'console-private'
         },
       },

@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { X, File, FileText, Image, Film, Music2, Folder, LoaderCircle } from 'lucide-react'
+import { X, File, FileText, Image, Film, Music2, Folder, Table2 } from 'lucide-react'
 import type { StoredObject } from './public-api'
 import { baseName, fileKind } from './format'
+import { DocumentPreview } from './document-preview'
+import { previewKind, supportsDocumentSource, type PreviewMode } from './preview-kind'
 
 export function FileGlyph({ object, folder = false, size = 18 }: { object?: StoredObject; folder?: boolean; size?: number }) {
   const kind = folder ? 'folder' : fileKind(object?.key || '', object?.contentType)
-  const Icon = ({ folder: Folder, file: File, text: FileText, image: Image, video: Film, audio: Music2, pdf: FileText })[kind]
+  const documentKind = previewKind(object?.key || '', object?.contentType)
+  const Icon = !folder && ['workbook', 'csv'].includes(documentKind) ? Table2 : !folder && ['markdown', 'docx'].includes(documentKind) ? FileText : ({ folder: Folder, file: File, text: FileText, image: Image, video: Film, audio: Music2, pdf: FileText })[kind]
   return <Icon size={size} strokeWidth={1.6} />
 }
 
@@ -57,28 +60,14 @@ export function Modal({ title, subtitle, onClose, children, wide = false, classN
   </div>
 }
 
-export function Preview({ object, sourceUrl }: { object: StoredObject; sourceUrl: string; bucket?: string }) {
-  const [text, setText] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+export function Preview({ object, sourceUrl, mode, showModeControls = true }: { object: StoredObject; sourceUrl: string; bucket?: string; mode?: PreviewMode; showModeControls?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false)
-  const kind = fileKind(object.key, object.contentType)
+  const kind = previewKind(object.key, object.contentType)
   const url = sourceUrl
-  useEffect(() => {
-    setText(''); setError(''); setLoading(true); setImageFailed(false)
-    if (kind !== 'text') return
-    const controller = new AbortController()
-    fetch(url, { headers: { Range: 'bytes=0-131071' }, signal: controller.signal }).then(async response => {
-      if (!response.ok) throw new Error('无法加载预览。')
-      const result = await response.text()
-      setText(result)
-    }).catch(error => { if (error.name !== 'AbortError') setError(error.message) }).finally(() => setLoading(false))
-    return () => controller.abort()
-  }, [url, kind])
+  useEffect(() => setImageFailed(false), [url])
+  if (supportsDocumentSource(kind)) return <DocumentPreview key={`${object.key}:${object.etag}`} object={object} sourceUrl={sourceUrl} kind={kind} mode={mode} showModeControls={showModeControls} />
   if (kind === 'image' && !imageFailed) return <div className="preview-image checkerboard"><img src={url} alt={baseName(object.key)} onError={() => setImageFailed(true)} /></div>
   if (kind === 'video') return <div className="preview-media"><video src={url} controls preload="metadata" /></div>
   if (kind === 'audio') return <div className="preview-audio"><Music2 size={44} strokeWidth={1} /><audio src={url} controls preload="metadata" /></div>
-  if (kind === 'pdf') return <iframe className="preview-pdf" src={url} title="PDF 预览" sandbox="allow-same-origin" />
-  if (kind === 'text') return <div className="preview-code">{loading ? <LoaderCircle size={22} className="spin" /> : error ? <p>{error}</p> : <><pre>{text}</pre>{object.size > 131072 && <span className="preview-limit">仅预览前 128 KB，下载可查看完整文件。</span>}</>}</div>
   return <div className="preview-unavailable"><FileGlyph object={object} size={48} /><strong>{imageFailed ? '浏览器无法预览这张图片' : '这个文件暂不支持在线预览'}</strong><span>可以下载后在本地打开</span></div>
 }

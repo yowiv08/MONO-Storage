@@ -202,7 +202,7 @@ try {
 
   await check('Public JavaScript omits administrator/API implementations and every private asset requires administrator access', async () => {
     const publicFiles = await directoryFiles(new URL('../dist/assets/', import.meta.url))
-    const javascript = publicFiles.filter(file => file.pathname.endsWith('.js'))
+    const javascript = publicFiles.filter(file => /\.(?:m?js)$/.test(file.pathname))
     assert.ok(javascript.length)
     const prohibited = /\/api\/(?:config|tokens)\b|mono_api_guide|mono_get_access_info|mcpServers|--data-binary|版本\s*1\.0\.0|INITIAL_SETUP_TOKEN|SESSION_SECRET/
     for (const file of javascript) {

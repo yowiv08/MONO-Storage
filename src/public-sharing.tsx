@@ -34,6 +34,6 @@ export function SharedFile({ id }: { id?: string }) {
       <div className="public-share-expiry"><Link2 size={14} />{file.expiresAt ? `分享有效至 ${formatDate(file.expiresAt, true)}` : '此分享长期有效'}</div>
     </div> : null}
   </main><p className="public-share-bottom">简单存储，自由分享。</p>
-    {preview && file && <Modal title={file.object.key} subtitle={formatBytes(file.object.size)} onClose={() => setPreview(false)} wide><Preview bucket="" object={file.object} sourceUrl={file.previewUrl} /><div className="modal-footer"><button className="button" onClick={() => setPreview(false)}>关闭</button><a className="button dark" href={file.downloadUrl} download><Download size={15} />下载文件</a></div></Modal>}
+    {preview && file && <Modal title={file.object.key} subtitle={formatBytes(file.object.size)} onClose={() => setPreview(false)} wide className="shared-file-viewer"><Preview bucket="" object={file.object} sourceUrl={file.previewUrl} /><div className="modal-footer"><button className="button" onClick={() => setPreview(false)}>关闭</button><a className="button dark" href={file.downloadUrl} download><Download size={15} />下载文件</a></div></Modal>}
   </div>
 }
