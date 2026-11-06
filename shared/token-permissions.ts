@@ -1,6 +1,6 @@
 export const tokenPermissionDefinitions = [
   { id: 'read', label: '读取文件', description: '列出文件、查看信息、预览和下载。', file: true },
-  { id: 'write', label: '写入文件', description: '上传、覆盖文件，包括分片上传。', file: true },
+  { id: 'write', label: '写入文件', description: '上传、覆盖、追加文件内容，包括分片上传。', file: true },
   { id: 'delete', label: '删除文件', description: '删除授权范围内的文件。', file: true },
   { id: 'create_folder', label: '创建目录', description: '在授权存储桶中创建目录。', file: false },
   { id: 'delete_folder', label: '删除目录', description: '删除授权存储桶中的空目录。', file: false },

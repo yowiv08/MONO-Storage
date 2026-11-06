@@ -58,3 +58,11 @@ test('Connection and workflow guides carry bounded-transfer and credential rules
   assert.match(workflow, /403：/)
   assert.match(workflow, /nextOffset/)
 })
+
+test('MCP guides use the configured append limit and offer append tools only for write permission', () => {
+  const scope = { type: 'bucket' as const, bucket: 'workspace' }
+  assert.match(mcpConnectionGuide(1024), /当前站点上限为 1024 MiB/)
+  assert.match(mcpInstructions(scope, ['write'], 128), /当前站点上限为 128 MiB/)
+  assert.match(offeredTools(mcpInstructions(scope, ['write'], 128)), /mono_append_text \/ mono_append_base64/)
+  assert.doesNotMatch(offeredTools(mcpInstructions(scope, ['read'], 128)), /mono_append_/)
+})

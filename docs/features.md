@@ -53,6 +53,18 @@ Token 支持全部存储桶、单桶和精确单文件范围。权限可选择�
 
 HTTP API 使用 Bearer Token，支持文件列表、信息、内容读写、Range、条件覆盖、文件统计、目录和分享管理。
 
+### 文件内容追加
+
+`POST /api/buckets/{bucket}/object/append?key=完整路径` 将请求正文原样追加到文件末尾，保留已有内容、文件类型和自定义元数据。需要 `write` 权限，单文件 Token 只能追加指定文件；不要求读取权限，也不会返回原文或原有自定义元数据。
+
+请求正文是新增字节，必须提供其准确的 `Content-Length`。不自动添加换行；日志、Markdown 或 CSV 需要换行时应在正文里包含换行符。该操作不会解析或合并 JSON、PDF、Excel 等结构化文件。
+
+默认要求文件存在；添加 `create=true` 可在不存在时创建，`Content-Type` 仅在创建时使用。成功返回 `key`、`size`、`etag`、`appendedBytes` 和 `created`，已有文件返回 200，新建文件返回 201。
+
+“设置 → 文件追加”可配置追加后的完整文件上限，范围 1–5115 MiB，默认 90 MiB。保存后对新的 API 和 MCP 请求立即生效；降低上限不会删除或截断已有文件，超过新上限的文件不能继续追加。最大值受 Cloudflare 单次对象写入上限约束，单次 HTTP 请求还受部署平台的请求大小限制。`If-Match` 可限定文件版本；并发冲突返回 `409 APPEND_CONFLICT`，本次内容不会写入。追加不是幂等操作，网络超时后应先核对结果，不能盲目重试。缺少长度返回 411，超出上限返回 413。追加改变文件版本，已有分享链接随之失效。
+
+MCP 提供 `mono_append_text` 和 `mono_append_base64`，每次新增最多 1 MiB，支持 `createIfMissing` 和 `ifMatch`。后台“API 访问”提供 cURL、JavaScript 和 Python 的追加示例。
+
 MCP 使用 Streamable HTTP 和独立 API Token，按授权范围和权限提供文件工具。后台“API 访问”页提供连接地址、客户端配置示例、AI 调用说明复制和 Markdown 下载。
 
 完整 API 调用指南和后台脚本需鉴权。匿名状态不提供产品版本、运行环境或后台配置，首次安装仅使用必要的初始化状态。

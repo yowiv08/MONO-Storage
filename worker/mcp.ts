@@ -10,6 +10,7 @@ export type McpAccessContext = {
   scope: TokenScope
   permissions: TokenPermission[]
   expiresAt: string | null
+  appendMaxMiB: number
   dispatch: (request: Request) => Promise<Response>
 }
 
@@ -79,7 +80,7 @@ export async function handleMcp(request: Request, context: McpAccessContext): Pr
   if (parsed instanceof Response) return parsed
   if (parsed.bytes > DEFAULT_BODY_BYTES && !(canMultipart && isMultipartCall(parsed.body))) return protocolError(413, -32000, 'Only multipart part uploads may exceed the standard 2 MiB request limit.')
 
-  const guide = mcpInstructions(context.scope, context.permissions)
+  const guide = mcpInstructions(context.scope, context.permissions, context.appendMaxMiB)
   const server = new McpServer({ name: 'mono-object-storage', version: '1.0.0' }, { instructions: guide, maxToolInputElements: 40000, jsonSchemaValidator: new CfWorkerJsonSchemaValidator() })
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, keepAliveMs: 0, maxRequestBodySize: maxBodyBytes })
   try {

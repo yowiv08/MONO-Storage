@@ -4,9 +4,10 @@ import { api, StorageError, type Bucket, type SessionState } from './api'
 import { Modal } from './components'
 import { formatDate } from './format'
 import { TokenManager } from './token-manager'
+import { DEFAULT_APPEND_MAX_MIB, MAX_APPEND_MAX_MIB } from '../shared/storage-limits'
 
 type LoginRateLimit = { maxAttempts: number; windowSeconds: number }
-type WorkspaceConfig = { displayName: string; adminPath: string; createdAt: string; updatedAt: string; loginRateLimit: LoginRateLimit }
+type WorkspaceConfig = { displayName: string; adminPath: string; createdAt: string; updatedAt: string; loginRateLimit: LoginRateLimit; appendMaxMiB: number }
 type ConfigResponse = { config: WorkspaceConfig; apiToken?: string }
 
 export function SettingsPage({ buckets, session, onSessionChange, onOpenBucket, notify }: {
@@ -21,6 +22,7 @@ export function SettingsPage({ buckets, session, onSessionChange, onOpenBucket, 
   const [adminPath, setAdminPath] = useState(session.adminPath || '')
   const [maxAttempts, setMaxAttempts] = useState('10')
   const [windowSeconds, setWindowSeconds] = useState('60')
+  const [appendMaxMiB, setAppendMaxMiB] = useState(String(DEFAULT_APPEND_MAX_MIB))
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [loadRevision, setLoadRevision] = useState(0)
@@ -58,6 +60,7 @@ export function SettingsPage({ buckets, session, onSessionChange, onOpenBucket, 
       setAdminPath(result.config.adminPath)
       setMaxAttempts(String(result.config.loginRateLimit?.maxAttempts ?? 10))
       setWindowSeconds(String(result.config.loginRateLimit?.windowSeconds ?? 60))
+      setAppendMaxMiB(String(result.config.appendMaxMiB ?? DEFAULT_APPEND_MAX_MIB))
     }).catch(error => { if (error.name !== 'AbortError') setLoadError(error.message) }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [loadRevision])
@@ -79,14 +82,16 @@ export function SettingsPage({ buckets, session, onSessionChange, onOpenBucket, 
     if (!nextPath.startsWith('/')) { setSaveError('后台入口需要以 / 开头，例如 /console。'); return }
     if (!Number.isInteger(loginRateLimit.maxAttempts) || loginRateLimit.maxAttempts < 1 || loginRateLimit.maxAttempts > 100) { setSaveError('登录尝试次数需要为 1 到 100 的整数。'); return }
     if (!Number.isInteger(loginRateLimit.windowSeconds) || loginRateLimit.windowSeconds < 10 || loginRateLimit.windowSeconds > 3600) { setSaveError('连续时间窗口需要为 10 到 3600 秒的整数。'); return }
+    if (!Number.isInteger(Number(appendMaxMiB)) || Number(appendMaxMiB) < 1 || Number(appendMaxMiB) > MAX_APPEND_MAX_MIB) { setSaveError(`追加后文件大小上限需要为 1 到 ${MAX_APPEND_MAX_MIB} MiB 的整数。`); return }
     setSaving(true)
     try {
-      const result = await api<ConfigResponse>('/api/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(configETag.current ? { 'If-Match': configETag.current } : {}) }, body: JSON.stringify({ displayName: nextName, adminPath: nextPath, loginRateLimit }) }, rememberConfigMutation)
+      const result = await api<ConfigResponse>('/api/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...(configETag.current ? { 'If-Match': configETag.current } : {}) }, body: JSON.stringify({ displayName: nextName, adminPath: nextPath, loginRateLimit, appendMaxMiB: Number(appendMaxMiB) }) }, rememberConfigMutation)
       applyConfig(result.config)
       setDisplayName(result.config.displayName)
       setAdminPath(result.config.adminPath)
       setMaxAttempts(String(result.config.loginRateLimit?.maxAttempts ?? 10))
       setWindowSeconds(String(result.config.loginRateLimit?.windowSeconds ?? 60))
+      setAppendMaxMiB(String(result.config.appendMaxMiB ?? DEFAULT_APPEND_MAX_MIB))
       setSaved(true)
       notify('工作空间配置已保存')
     } catch (error) {
@@ -139,19 +144,20 @@ export function SettingsPage({ buckets, session, onSessionChange, onOpenBucket, 
     finally { setTokenBusy(false) }
   }
 
-  const changed = Boolean(config && (displayName.trim() !== config.displayName || adminPath.trim() !== config.adminPath || Number(maxAttempts) !== (config.loginRateLimit?.maxAttempts ?? 10) || Number(windowSeconds) !== (config.loginRateLimit?.windowSeconds ?? 60)))
+  const changed = Boolean(config && (displayName.trim() !== config.displayName || adminPath.trim() !== config.adminPath || Number(maxAttempts) !== (config.loginRateLimit?.maxAttempts ?? 10) || Number(windowSeconds) !== (config.loginRateLimit?.windowSeconds ?? 60) || Number(appendMaxMiB) !== config.appendMaxMiB))
 
   return <div className="settings-page">
-    <div className="eyebrow">SETTINGS</div><h1>设置</h1><p className="page-description">修改工作空间和登录限速，管理 API Token 与管理员密钥。</p>
+    <div className="eyebrow">SETTINGS</div><h1>设置</h1><p className="page-description">修改工作空间、文件追加上限和登录限速，管理 API Token 与管理员密钥。</p>
     <section className="settings-card">
       <div className="settings-section-heading"><Settings2 size={19} /><h3>工作空间</h3></div>
       {loading ? <div className="settings-loading" role="status"><LoaderCircle size={18} className="spin" />正在读取配置</div> : loadError ? <div className="settings-load-error"><p className="form-error" role="alert"><AlertCircle size={16} />{loadError}</p><button className="button" type="button" onClick={reloadConfig}><RefreshCw size={15} />重新读取配置</button></div> : <form className="settings-form" onSubmit={saveConfig}>
         <div className="setting-field"><label className="field-label" htmlFor="settings-display-name">工作空间名称</label><input id="settings-display-name" className="text-input" value={displayName} maxLength={80} required minLength={2} disabled={saving} aria-describedby="settings-name-hint" onChange={event => { setDisplayName(event.target.value); setSaved(false) }} /><p className="setting-hint" id="settings-name-hint">显示在侧边栏和浏览器标题中，长度为 2 到 80 个字符。</p></div>
         <div className="setting-field"><label className="field-label" htmlFor="settings-admin-path">后台入口</label><input id="settings-admin-path" className="text-input mono" value={adminPath} required autoComplete="off" spellCheck={false} disabled={saving} aria-describedby="settings-path-hint" onChange={event => { setAdminPath(event.target.value); setSaved(false) }} /><p className="setting-hint" id="settings-path-hint">例如 /console。保存后当前页面会切换到新入口，旧入口停止访问。请更新收藏的后台地址。</p></div>
         <fieldset className="settings-rate-limit"><legend className="field-label">登录限速</legend><div className="settings-rate-limit-fields"><div className="setting-field"><label className="field-label" htmlFor="settings-login-attempts">最大登录尝试次数</label><input id="settings-login-attempts" className="text-input" type="number" min={1} max={100} step={1} required disabled={saving} value={maxAttempts} aria-describedby="settings-login-limit-hint" onChange={event => { setMaxAttempts(event.target.value); setSaved(false) }} /></div><div className="setting-field"><label className="field-label" htmlFor="settings-login-window">连续时间窗口（秒）</label><input id="settings-login-window" className="text-input" type="number" min={10} max={3600} step={1} required disabled={saving} value={windowSeconds} aria-describedby="settings-login-limit-hint" onChange={event => { setWindowSeconds(event.target.value); setSaved(false) }} /></div></div><p className="setting-hint" id="settings-login-limit-hint">每个来源 IP 在任意连续窗口内最多允许上述次数的登录尝试，成功和失败都会计入。登录限速不能关闭；保存后立即生效。</p></fieldset>
+        <fieldset className="settings-rate-limit"><legend className="field-label">文件追加</legend><div className="setting-field"><label className="field-label" htmlFor="settings-append-limit">追加后文件大小上限（MiB）</label><input id="settings-append-limit" className="text-input" type="number" min={1} max={MAX_APPEND_MAX_MIB} step={1} required disabled={saving} value={appendMaxMiB} aria-describedby="settings-append-limit-hint" onChange={event => { setAppendMaxMiB(event.target.value); setSaved(false) }} /><p className="setting-hint" id="settings-append-limit-hint">可设置 1–{MAX_APPEND_MAX_MIB} MiB，默认 {DEFAULT_APPEND_MAX_MIB} MiB。限制追加后的完整文件大小，保存后对新的 API 和 MCP 追加请求立即生效；已有文件保留。上限受 Cloudflare 单次对象写入限制。MCP 每次新增内容最多 1 MiB。</p></div></fieldset>
         {saveError && <p className="form-error" role="alert"><AlertCircle size={16} />{saveError}</p>}
         {saveConflict && <button className="button" type="button" onClick={reloadConfig}><RefreshCw size={15} />重新读取配置</button>}
-        <div className="settings-actions"><span className="settings-save-status" role="status">{saved ? <><CheckCircle2 size={16} />配置已保存</> : config?.updatedAt ? `上次更新：${formatDate(config.updatedAt, true)}` : ''}</span><div><button className="button" type="button" disabled={saving || !changed} onClick={() => { if (config) { setDisplayName(config.displayName); setAdminPath(config.adminPath); setMaxAttempts(String(config.loginRateLimit?.maxAttempts ?? 10)); setWindowSeconds(String(config.loginRateLimit?.windowSeconds ?? 60)); if (!saveConflict) setSaveError(''); setSaved(false) } }}>还原修改</button><button className="button dark" type="submit" disabled={saving || saveConflict || !changed}>{saving ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />}{saving ? '正在保存' : '保存配置'}</button></div></div>
+        <div className="settings-actions"><span className="settings-save-status" role="status">{saved ? <><CheckCircle2 size={16} />配置已保存</> : config?.updatedAt ? `上次更新：${formatDate(config.updatedAt, true)}` : ''}</span><div><button className="button" type="button" disabled={saving || !changed} onClick={() => { if (config) { setDisplayName(config.displayName); setAdminPath(config.adminPath); setMaxAttempts(String(config.loginRateLimit?.maxAttempts ?? 10)); setWindowSeconds(String(config.loginRateLimit?.windowSeconds ?? 60)); setAppendMaxMiB(String(config.appendMaxMiB ?? DEFAULT_APPEND_MAX_MIB)); if (!saveConflict) setSaveError(''); setSaved(false) } }}>还原修改</button><button className="button dark" type="submit" disabled={saving || saveConflict || !changed}>{saving ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />}{saving ? '正在保存' : '保存配置'}</button></div></div>
       </form>}
     </section>
     <section className="settings-card">

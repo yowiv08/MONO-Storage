@@ -43,7 +43,7 @@ try {
     assert.equal(config.displayName, '配置验证工作空间')
     assert.equal(config.adminPath, '/console')
     assert.ok(etag)
-    assert.deepEqual(Object.keys(config).sort(), ['adminPath', 'createdAt', 'displayName', 'loginRateLimit', 'updatedAt'])
+    assert.deepEqual(Object.keys(config).sort(), ['adminPath', 'appendMaxMiB', 'createdAt', 'displayName', 'loginRateLimit', 'updatedAt'])
     assert.deepEqual(config.loginRateLimit, { maxAttempts: 10, windowSeconds: 60 })
   })
   await check('Config reads and writes require authentication and mutation source marker', async () => {

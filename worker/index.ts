@@ -1,5 +1,7 @@
 import { ApiError, SIMPLE_UPLOAD_LIMIT, PART_SIZE, MAX_OBJECT_SIZE, FOLDER_CONTENT_TYPE, objectKey, prefixValue, boundedInteger, signPayload, verifyPayload, equalSecrets, hashSecret, normalizeAdminPath } from './core'
 import { objectResponse } from './objects'
+import { appendObject } from './append'
+import { MIB, normalizeAppendMaxMiB } from '../shared/storage-limits.ts'
 import { createShare, currentShare, resolveShare, revokeShare, shareInfo } from './shares'
 import { accessTokenInfo, assertTokenBucket, assertTokenPermission, createAccessToken, revokeAccessToken, tokenIsActive, updateAccessToken, validateTokenRegistry, type StoredAccessToken } from './access-tokens'
 import type { TokenPermission } from '../shared/token-permissions'
@@ -35,6 +37,7 @@ type StoredConfig = {
   apiTokens?: StoredAccessToken[]
   loginRateLimit?: LoginRateLimit
   loginRateLimitVersion?: number
+  appendMaxMiB?: number
   createdAt: string
   updatedAt: string
 }
@@ -96,8 +99,9 @@ async function readStoredConfig(env: Env): Promise<ConfigSnapshot | null> {
     if (value.credentialVersion !== undefined && (typeof value.credentialVersion !== 'string' || !/^[a-f0-9]{32}$/.test(value.credentialVersion))) throw new Error('Invalid credential version')
     const apiTokens = validateTokenRegistry(value.apiTokens)
     const loginRateLimit = normalizeLoginRateLimit(value.loginRateLimit)
+    const appendMaxMiB = normalizeAppendMaxMiB(value.appendMaxMiB)
     if (value.loginRateLimitVersion !== undefined && (!Number.isSafeInteger(value.loginRateLimitVersion) || value.loginRateLimitVersion < 0)) throw new Error('Invalid login rate limit version')
-    return { version: 1, adminPath: value.adminPath, displayName: value.displayName, apiTokenHash: value.apiTokenHash, ...(value.credentialVersion === undefined ? {} : { credentialVersion: value.credentialVersion }), ...(value.apiTokens === undefined ? {} : { apiTokens }), loginRateLimit, loginRateLimitVersion: value.loginRateLimitVersion ?? 0, createdAt: String(value.createdAt || ''), updatedAt: String(value.updatedAt || ''), etag: object.etag }
+    return { version: 1, adminPath: value.adminPath, displayName: value.displayName, apiTokenHash: value.apiTokenHash, ...(value.credentialVersion === undefined ? {} : { credentialVersion: value.credentialVersion }), ...(value.apiTokens === undefined ? {} : { apiTokens }), loginRateLimit, loginRateLimitVersion: value.loginRateLimitVersion ?? 0, appendMaxMiB, createdAt: String(value.createdAt || ''), updatedAt: String(value.updatedAt || ''), etag: object.etag }
   } catch {
     throw new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用，请稍后再试。')
   }
@@ -152,7 +156,7 @@ function configFingerprint(config: StoredConfig): string {
 }
 
 function configInfo(config: StoredConfig) {
-  return { displayName: config.displayName, adminPath: config.adminPath, createdAt: config.createdAt, updatedAt: config.updatedAt, loginRateLimit: normalizeLoginRateLimit(config.loginRateLimit) }
+  return { displayName: config.displayName, adminPath: config.adminPath, createdAt: config.createdAt, updatedAt: config.updatedAt, loginRateLimit: normalizeLoginRateLimit(config.loginRateLimit), appendMaxMiB: normalizeAppendMaxMiB(config.appendMaxMiB) }
 }
 
 function setupStatus(env: Env, url: URL, config: StoredConfig | null, authenticated = false) {
@@ -411,7 +415,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   if (!principal) throw new ApiError(401, 'UNAUTHORIZED', '请先登录，或使用 Bearer Token 调用 API。')
   assertMutation(request)
   if (path === '/api/mcp/guide' && ['GET', 'HEAD'].includes(request.method)) {
-    const guide = principal.type === 'admin' ? mcpConnectionGuide() : mcpInstructions(principal.token.scope, principal.token.permissions)
+    const guide = principal.type === 'admin' ? mcpConnectionGuide(normalizeAppendMaxMiB(config.appendMaxMiB)) : mcpInstructions(principal.token.scope, principal.token.permissions, normalizeAppendMaxMiB(config.appendMaxMiB))
     return new Response(request.method === 'HEAD' ? null : guide, { headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'private, no-store, no-transform', 'Content-Disposition': 'attachment; filename="mono-mcp-guide.md"', 'X-Robots-Tag': 'noindex, nofollow' } })
   }
   if (path === '/api/panel' && request.method === 'GET') {
@@ -444,7 +448,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     requireAdministrator(principal)
     const body = await readJson(request)
     const fields = Object.keys(body)
-    if (!fields.length || fields.some(field => !['displayName', 'adminPath', 'apiToken', 'loginRateLimit'].includes(field))) throw new ApiError(400, 'INVALID_CONFIG_UPDATE', '配置包含不支持的字段。')
+    if (!fields.length || fields.some(field => !['displayName', 'adminPath', 'apiToken', 'loginRateLimit', 'appendMaxMiB'].includes(field))) throw new ApiError(400, 'INVALID_CONFIG_UPDATE', '配置包含不支持的字段。')
     const expectedEtag = request.headers.get('If-Match')
     if (!matchesRevision(expectedEtag, config.etag)) throw new ApiError(409, 'CONFIG_CONFLICT', '配置已被其他窗口修改，请刷新后重试。')
     let displayName = config.displayName
@@ -456,6 +460,11 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     const adminPath = 'adminPath' in body ? normalizeAdminPath(body.adminPath) : config.adminPath
     if ('adminPath' in body && adminPath === '/mcp') throw new ApiError(400, 'INVALID_ADMIN_PATH', '后台入口不能使用 MCP 接口路径 /mcp。')
     let apiToken: string | undefined
+    let appendMaxMiB = normalizeAppendMaxMiB(config.appendMaxMiB)
+    if ('appendMaxMiB' in body) {
+      try { appendMaxMiB = normalizeAppendMaxMiB(body.appendMaxMiB) }
+      catch (error) { throw new ApiError(400, 'INVALID_APPEND_LIMIT', error instanceof Error ? error.message : '追加上限无效。') }
+    }
     let loginRateLimit = normalizeLoginRateLimit(config.loginRateLimit)
     if ('loginRateLimit' in body) {
       try { loginRateLimit = normalizeLoginRateLimit(body.loginRateLimit) }
@@ -474,7 +483,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     }
     const next: StoredConfig = {
       version: 1, displayName, adminPath,
-      loginRateLimit, loginRateLimitVersion,
+      loginRateLimit, loginRateLimitVersion, appendMaxMiB,
       apiTokenHash: apiToken === undefined ? config.apiTokenHash : await hashSecret(apiToken),
       ...(apiToken === undefined ? config.credentialVersion === undefined ? {} : { credentialVersion: config.credentialVersion } : { credentialVersion: crypto.randomUUID().replaceAll('-', '') }),
       ...(config.apiTokens === undefined ? {} : { apiTokens: apiToken === undefined ? config.apiTokens : config.apiTokens.map(revokeAccessToken) }),
@@ -523,13 +532,21 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   }
   if (path === '/api/buckets' && request.method === 'GET') {
     const visible = buckets(env).filter(bucket => principal.type === 'admin' || principal.token.scope.type === 'all' || principal.token.scope.bucket === bucket.name)
-    return json({ buckets: visible.map(bucket => ({ name: bucket.name, description: bucket.description })), capabilities: { simpleUploadLimit: SIMPLE_UPLOAD_LIMIT, partSize: PART_SIZE, maxObjectSize: MAX_OBJECT_SIZE }, ...(principal.type === 'admin' ? { config: { adminPath: config.adminPath, displayName: config.displayName } } : {}) })
+    return json({ buckets: visible.map(bucket => ({ name: bucket.name, description: bucket.description })), capabilities: { simpleUploadLimit: SIMPLE_UPLOAD_LIMIT, appendMaxObjectBytes: normalizeAppendMaxMiB(config.appendMaxMiB) * MIB, partSize: PART_SIZE, maxObjectSize: MAX_OBJECT_SIZE }, ...(principal.type === 'admin' ? { config: { adminPath: config.adminPath, displayName: config.displayName } } : {}) })
   }
-  const match = /^\/api\/buckets\/([a-z0-9_-]+)\/(objects|object|folders|uploads|shares|stats|archive)(?:\/(part|complete|abort))?$/.exec(path)
+  const match = /^\/api\/buckets\/([a-z0-9_-]+)\/(objects|object|folders|uploads|shares|stats|archive)(?:\/(part|complete|abort|append))?$/.exec(path)
   if (!match) throw new ApiError(404, 'NOT_FOUND', 'API 路径不存在。')
   const [, name, resource, action] = match
   if (principal.type === 'token') assertTokenBucket(principal.token, name)
   const bucket = getBucket(env, name)
+
+  if (resource === 'object' && action === 'append' && request.method === 'POST') {
+    const key = publicObjectKey(url.searchParams.get('key'))
+    authorize(principal, 'write', name, key)
+    if ([...url.searchParams.keys()].some(parameter => parameter !== 'key' && parameter !== 'create') || url.searchParams.getAll('key').length !== 1 || url.searchParams.getAll('create').length > 1 || (url.searchParams.has('create') && !['true', 'false'].includes(url.searchParams.get('create')!))) throw new ApiError(400, 'INVALID_APPEND_QUERY', '追加接口只接受一个 key 和可选的 create=true 或 create=false。')
+    const result = await appendObject(bucket, key, request, { createIfMissing: url.searchParams.get('create') === 'true', contentType: contentType(request.headers.get('Content-Type')), maxMiB: normalizeAppendMaxMiB(config.appendMaxMiB) })
+    return json(result, result.created ? 201 : 200, { ETag: result.etag })
+  }
 
   if (resource === 'archive' && !action && request.method === 'POST') {
     if (url.searchParams.size) throw new ApiError(400, 'INVALID_ARCHIVE_QUERY', '打包下载只接受 JSON 文件列表。')
@@ -704,9 +721,10 @@ async function mcp(request: Request, env: Env, url: URL): Promise<Response> {
     scope: principal.token.scope,
     permissions: [...principal.token.permissions],
     expiresAt: principal.token.expiresAt,
+    appendMaxMiB: normalizeAppendMaxMiB(configuration.appendMaxMiB),
     dispatch: async storageRequest => {
       const storageUrl = new URL(storageRequest.url)
-      if (storageUrl.origin !== url.origin || !/^\/api\/buckets(?:$|\/[a-z0-9_-]+\/(?:objects|object|folders|uploads|shares|stats)(?:\/(?:part|complete|abort))?$)/.test(storageUrl.pathname)) throw new ApiError(403, 'MCP_ROUTE_DENIED', 'MCP 只允许调用本站存储 API。')
+      if (storageUrl.origin !== url.origin || !/^\/api\/buckets(?:$|\/[a-z0-9_-]+\/(?:objects|object|folders|uploads|shares|stats)(?:\/(?:part|complete|abort|append))?$)/.test(storageUrl.pathname)) throw new ApiError(403, 'MCP_ROUTE_DENIED', 'MCP 只允许调用本站存储 API。')
       const headers = new Headers(storageRequest.headers)
       headers.set('Authorization', authorization)
       headers.delete('Cookie')

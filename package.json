@@ -10,7 +10,8 @@
     "deploy": "npm run build && wrangler deploy",
     "test": "node --test tests/*.test.ts",
     "verify": "node scripts/verify-api.mjs",
-    "verify:mcp": "node scripts/verify-mcp.mjs"
+    "verify:mcp": "node scripts/verify-mcp.mjs",
+    "verify:append": "node scripts/verify-append.mjs"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
