@@ -44,6 +44,12 @@ export async function readPreviewResponse(response: Response, maxBytes: number, 
   }
 }
 
+function previewEtag(value: string): string {
+  const etag = value.trim()
+  // Compression can weaken the HTTP ETag without changing the stored object.
+  return /^(?:W\/)?"([^"]*)"$/.exec(etag)?.[1] ?? etag
+}
+
 export async function fetchPreviewData(sourceUrl: string, object: { size: number; etag: string }, signal: AbortSignal, text = false): Promise<PreviewData> {
   const url = new URL(sourceUrl, location.origin)
   if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) throw new Error('文件预览地址无效。')
@@ -63,8 +69,8 @@ export async function fetchPreviewData(sourceUrl: string, object: { size: number
     } catch { aborted(signal) }
     throw new Error(message)
   }
-  const receivedEtag = response.headers.get('ETag')?.replace(/^"|"$/g, '')
-  if (receivedEtag && object.etag && receivedEtag !== object.etag.replace(/^"|"$/g, '')) {
+  const receivedEtag = response.headers.get('ETag')
+  if (receivedEtag && object.etag && previewEtag(receivedEtag) !== previewEtag(object.etag)) {
     await response.body?.cancel()
     throw new Error('文件已发生变化，请关闭预览并刷新文件列表。')
   }

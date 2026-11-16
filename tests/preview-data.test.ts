@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { decodePreviewText, readPreviewResponse } from '../src/preview-data.ts'
+import test, { type TestContext } from 'node:test'
+import { decodePreviewText, fetchPreviewData, readPreviewResponse } from '../src/preview-data.ts'
 import { previewKind, supportsDocumentSource } from '../src/preview-kind.ts'
 import { safeDocumentLink, safeEmbeddedImage } from '../src/preview-links.ts'
+
+function mockPreviewResponse(t: TestContext, createResponse: () => Response) {
+  const location = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: new URL('https://storage.example.test') })
+  t.after(() => {
+    if (location) Object.defineProperty(globalThis, 'location', location)
+    else Reflect.deleteProperty(globalThis, 'location')
+  })
+  t.mock.method(globalThis, 'fetch', async () => createResponse())
+}
 
 test('Document formats are recognized before generic MIME labels and normalize MIME parameters', () => {
   for (const key of ['README.MD', '中文.markdown']) assert.equal(previewKind(key, 'text/plain'), 'markdown')
@@ -55,4 +65,53 @@ test('Document resources cannot run script or automatically request sibling and 
   assert.equal(safeDocumentLink('#标题'), '#标题')
   for (const url of ['https://example.com/tracker.png', '../secret.png', 'data:image/svg+xml;base64,AAAA', 'javascript:alert(1)']) assert.equal(safeEmbeddedImage(url), null)
   assert.equal(safeEmbeddedImage('data:image/png;base64,iVBORw0KGgo='), 'data:image/png;base64,iVBORw0KGgo=')
+})
+
+test('Private and shared previews accept matching raw, quoted and weak ETags', async t => {
+  const content = 'preview: 文件内容\n'
+  const size = new TextEncoder().encode(content).byteLength
+  let receivedEtag = ''
+  mockPreviewResponse(t, () => new Response(content, { headers: { ETag: receivedEtag } }))
+  const variants = [
+    ['abc123-2', '"abc123-2"'],
+    ['abc123-2', 'W/"abc123-2"'],
+    ['"abc123-2"', 'W/"abc123-2"'],
+    ['W/"abc123-2"', '"abc123-2"'],
+    ['W/"abc123-2"', 'W/"abc123-2"'],
+    ['abc123-2', 'abc123-2'],
+    ['abc123-2', ' \tW/"abc123-2"\t '],
+  ]
+  for (const [etag, received] of variants) {
+    receivedEtag = received
+    for (const sourceUrl of ['/api/buckets/workspace/object?key=payfree.txt', '/s/example/file']) {
+      for (const text of [true, false]) {
+        const result = await fetchPreviewData(sourceUrl, { size, etag }, new AbortController().signal, text)
+        assert.equal(decodePreviewText(result.data), content)
+        assert.equal(result.truncated, false)
+      }
+    }
+  }
+})
+
+test('Changed and malformed preview ETags are rejected before reading the response body', async t => {
+  let receivedEtag = ''
+  let reads = 0
+  let cancelled = false
+  mockPreviewResponse(t, () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) { reads++; controller.enqueue(new Uint8Array(3)); controller.close() },
+    cancel() { cancelled = true },
+  }, { highWaterMark: 0 }), { headers: { ETag: receivedEtag } }))
+  for (const etag of ['"changed"', 'W/"changed"', 'W/"abc123-3"', '"ABC123-2"', 'W/abc123-2', '"abc123-2', 'abc123-2"', '"abc123-2", "changed"', '*']) {
+    receivedEtag = etag
+    reads = 0
+    cancelled = false
+    await assert.rejects(fetchPreviewData('/api/buckets/workspace/object?key=payfree.txt', { size: 3, etag: 'abc123-2' }, new AbortController().signal, true), /文件已发生变化/)
+    assert.equal(reads, 0)
+    assert.equal(cancelled, true)
+  }
+})
+
+test('Matching weak ETags still require a complete preview response', async t => {
+  mockPreviewResponse(t, () => new Response('short', { headers: { ETag: 'W/"abc123-2"' } }))
+  await assert.rejects(fetchPreviewData('/s/example/file', { size: 100, etag: 'abc123-2' }, new AbortController().signal, true), /文件内容读取不完整/)
 })
