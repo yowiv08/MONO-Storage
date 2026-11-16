@@ -60,12 +60,12 @@ export function Modal({ title, subtitle, onClose, children, wide = false, classN
   </div>
 }
 
-export function Preview({ object, sourceUrl, mode, showModeControls = true }: { object: StoredObject; sourceUrl: string; bucket?: string; mode?: PreviewMode; showModeControls?: boolean }) {
+export function Preview({ object, sourceUrl, metadataUrl, onObjectChange, mode, showModeControls = true }: { object: StoredObject; sourceUrl: string; metadataUrl?: string; onObjectChange?: (object: StoredObject) => void; bucket?: string; mode?: PreviewMode; showModeControls?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false)
   const kind = previewKind(object.key, object.contentType)
   const url = sourceUrl
   useEffect(() => setImageFailed(false), [url])
-  if (supportsDocumentSource(kind)) return <DocumentPreview key={`${object.key}:${object.etag}`} object={object} sourceUrl={sourceUrl} kind={kind} mode={mode} showModeControls={showModeControls} />
+  if (supportsDocumentSource(kind)) return <DocumentPreview key={sourceUrl} object={object} sourceUrl={sourceUrl} metadataUrl={metadataUrl} onObjectChange={onObjectChange} kind={kind} mode={mode} showModeControls={showModeControls} />
   if (kind === 'image' && !imageFailed) return <div className="preview-image checkerboard"><img src={url} alt={baseName(object.key)} onError={() => setImageFailed(true)} /></div>
   if (kind === 'video') return <div className="preview-media"><video src={url} controls preload="metadata" /></div>
   if (kind === 'audio') return <div className="preview-audio"><Music2 size={44} strokeWidth={1} /><audio src={url} controls preload="metadata" /></div>

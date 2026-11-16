@@ -9,8 +9,8 @@ export { FileGlyph, Modal } from './common-components'
 import { Preview as CommonPreview } from './common-components'
 import type { PreviewMode } from './preview-kind'
 
-export function Preview({ bucket, object, sourceUrl, mode, showModeControls }: { bucket: string; object: StoredObject; sourceUrl?: string; mode?: PreviewMode; showModeControls?: boolean }) {
-  return <CommonPreview object={object} sourceUrl={sourceUrl || objectUrl(bucket, object.key)} mode={mode} showModeControls={showModeControls} />
+export function Preview({ bucket, object, sourceUrl, onObjectChange, mode, showModeControls }: { bucket: string; object: StoredObject; sourceUrl?: string; onObjectChange?: (object: StoredObject) => void; mode?: PreviewMode; showModeControls?: boolean }) {
+  return <CommonPreview object={object} sourceUrl={sourceUrl || objectUrl(bucket, object.key)} metadataUrl={sourceUrl ? undefined : `${objectUrl(bucket, object.key)}&metadata=true`} onObjectChange={onObjectChange} mode={mode} showModeControls={showModeControls} />
 }
 
 export function ApiGuide({ bucket, notify }: { bucket: string; notify: (message: string) => void }) {

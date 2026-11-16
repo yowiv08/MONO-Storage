@@ -1,7 +1,7 @@
-import { Component, lazy, Suspense, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { AlignLeft, BookOpen, LoaderCircle, RefreshCw } from 'lucide-react'
 import type { StoredObject } from './public-api'
-import { decodePreviewText, fetchPreviewData, type PreviewData } from './preview-data'
+import { decodePreviewText, fetchDocumentPreview, type DocumentPreviewData } from './preview-data'
 import { sourceModeLabel, type PreviewKind, type PreviewMode } from './preview-kind'
 
 const TextPreview = lazy(() => import('./preview-text').then(module => ({ default: module.TextPreview })))
@@ -19,21 +19,29 @@ class PreviewBoundary extends Component<{ children: ReactNode; mode: PreviewMode
   }
 }
 
-export function DocumentPreview({ object, sourceUrl, kind, mode: controlledMode, showModeControls = true }: { object: StoredObject; sourceUrl: string; kind: PreviewKind; mode?: PreviewMode; showModeControls?: boolean }) {
+export function DocumentPreview({ object, sourceUrl, metadataUrl, onObjectChange, kind: initialKind, mode: controlledMode, showModeControls = true }: { object: StoredObject; sourceUrl: string; metadataUrl?: string; onObjectChange?: (object: StoredObject) => void; kind: PreviewKind; mode?: PreviewMode; showModeControls?: boolean }) {
   const id = useId()
   const [localMode, setLocalMode] = useState<PreviewMode>('preview')
-  const [content, setContent] = useState<PreviewData | null>(null)
+  const [content, setContent] = useState<DocumentPreviewData | null>(null)
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  const updateObject = useRef(onObjectChange)
+  updateObject.current = onObjectChange
+  const fallbackObject = metadataUrl ? null : object
+  const kind = content?.kind ?? initialKind
   const text = ['markdown', 'csv', 'html', 'json', 'text'].includes(kind)
   const mode = controlledMode ?? localMode
   useEffect(() => {
     const controller = new AbortController()
     setContent(null); setError('')
-    fetchPreviewData(sourceUrl, object, controller.signal, text).then(result => { if (!controller.signal.aborted) setContent(result) }).catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : '无法读取文件。') })
+    fetchDocumentPreview(sourceUrl, object, controller.signal, metadataUrl).then(result => {
+      if (controller.signal.aborted) return
+      setContent(result)
+      if (metadataUrl) updateObject.current?.(result.object)
+    }).catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : '无法读取文件。') })
     return () => controller.abort()
-  }, [sourceUrl, object.size, object.etag, text, retry])
-  const decoded = content && text ? decodePreviewText(content.data, content.truncated) : ''
+  }, [sourceUrl, metadataUrl, object.key, fallbackObject?.size, fallbackObject?.etag, fallbackObject?.contentType, retry])
+  const decoded = content && text ? decodePreviewText(content.data, content.truncated, content.object.contentType) : ''
   function switchMode(event: KeyboardEvent<HTMLDivElement>) {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || controlledMode) return
     event.preventDefault()

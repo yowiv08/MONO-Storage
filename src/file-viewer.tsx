@@ -7,11 +7,12 @@ import { previewKind, sourceModeLabel, supportsDocumentSource } from './preview-
 
 export type FileViewTab = 'preview' | 'source' | 'info'
 
-export function FileViewer({ bucket, object, tab, onTabChange, onClose, onShare, onTokens, notify }: {
+export function FileViewer({ bucket, object, tab, onTabChange, onObjectChange, onClose, onShare, onTokens, notify }: {
   bucket: string
   object: StoredObject
   tab: FileViewTab
   onTabChange: (tab: FileViewTab) => void
+  onObjectChange: (object: StoredObject) => void
   onClose: () => void
   onShare: () => void
   onTokens: () => void
@@ -40,7 +41,7 @@ export function FileViewer({ bucket, object, tab, onTabChange, onClose, onShare,
       <button role="tab" id={`${id}-info-tab`} aria-controls={`${id}-panel`} aria-selected={tab === 'info'} tabIndex={tab === 'info' ? 0 : -1} data-tab="info" onClick={() => onTabChange('info')}>文件信息</button>
     </div>
     <div className="file-viewer-body" id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}-tab`}>
-      {tab !== 'info' && <Preview key={object.key} bucket={bucket} object={object} mode={tab === 'source' ? 'source' : 'preview'} showModeControls={false} />}
+      {tab !== 'info' && <Preview key={object.key} bucket={bucket} object={object} onObjectChange={onObjectChange} mode={tab === 'source' ? 'source' : 'preview'} showModeControls={false} />}
       {tab === 'info' && <dl className="file-info-list">
         <div className="file-info-wide"><dt>对象路径</dt><dd className="file-info-path"><span>{object.key}</span><button className="icon-button" aria-label="复制对象路径" onClick={copyPath}><Copy size={16} /></button></dd></div>
         <div><dt>存储桶</dt><dd>{bucket}</dd></div><div><dt>文件大小</dt><dd>{formatBytes(object.size)}</dd></div>
