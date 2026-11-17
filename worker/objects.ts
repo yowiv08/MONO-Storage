@@ -1,4 +1,4 @@
-import { ApiError, downloadDisposition, resolveRange } from './core'
+import { ApiError, downloadDisposition, resolveRange } from './core.ts'
 
 export async function objectResponse(request: Request, bucket: R2Bucket, key: string, download = false, expectedVersion?: string): Promise<Response> {
   const head = await bucket.head(key)

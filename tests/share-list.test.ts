@@ -60,7 +60,7 @@ test('Share overview filters stale, revoked, expired, replaced, deleted and unau
   await f.add(9, { key: '_mono/system-config.json' })
   await f.add(10, {}, { revoked: true })
   const result = await listActiveSharesPage(f.primary as never, f.getBucket as never, ['workspace'], 'current-installation')
-  assert.deepEqual(result, { shares: [{ id: active.id, url: `/s/${active.id}`, createdAt: active.createdAt, expiresAt: null, bucket: 'workspace', key: active.key, size: 123, contentType: 'text/plain', uploaded: '2026-01-02T00:00:00.000Z' }], cursor: null, truncated: false })
+  assert.deepEqual(result, { shares: [{ id: active.id, url: `/s/${active.id}`, createdAt: active.createdAt, expiresAt: null, followUpdates: false, bucket: 'workspace', key: active.key, size: 123, contentType: 'text/plain', uploaded: '2026-01-02T00:00:00.000Z' }], cursor: null, truncated: false })
   assert.ok(!JSON.stringify(result).includes('fingerprint') && !JSON.stringify(result).includes('private-metadata') && !JSON.stringify(result).includes('objectVersion'))
   assert.ok(!f.bucketCalls.includes('archive'), 'An excluded bucket must not be queried.')
   assert.ok(f.peak() <= 6, 'Share record reads must stay bounded even when a page contains many entries.')
@@ -77,6 +77,22 @@ test('A full invalid page returns its cursor and the next page supplies the rema
   assert.equal(second.truncated, false)
   assert.equal(second.cursor, null)
   assert.deepEqual(f.listCalls, [{ prefix: '_mono/shares/links/', limit: 100 }, { prefix: '_mono/shares/links/', limit: 100, cursor: '100' }])
+})
+
+test('The share overview keeps following links after file updates and reads the current index mode', async () => {
+  const f = fixture()
+  const created = await f.add(1, { followUpdates: true })
+  const upgraded = await f.add(2, {}, { followUpdates: true })
+  const pinned = await f.add(3)
+  for (const share of [created, upgraded, pinned]) {
+    const head = f.heads.get(`${share.bucket}/${share.key}`)!
+    head.version = 'updated-version'
+    head.size = 456
+  }
+  await f.add(4, {}, { followUpdates: 'true' as never })
+  await f.add(5, { followUpdates: true }, { objectVersion: 'unrelated-version' })
+  const result = await listActiveSharesPage(f.primary as never, f.getBucket as never, ['workspace'], 'current-installation')
+  assert.deepEqual(result.shares.map(share => [share.id, share.followUpdates, share.size]), [[created.id, true, 456], [upgraded.id, true, 456]])
 })
 
 test('Malformed records are ignored and invalid cursor responses fail before an unbounded scan', async () => {

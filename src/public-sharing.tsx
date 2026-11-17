@@ -6,7 +6,7 @@ import { formatBytes, formatDate } from './format'
 import { parseShareLink } from './share-link'
 import { ThemeToggle } from './theme'
 
-type PublicFile = { object: StoredObject; expiresAt: string | null; previewUrl: string; downloadUrl: string }
+type PublicFile = { object: StoredObject; expiresAt: string | null; followUpdates: boolean; previewUrl: string; downloadUrl: string }
 
 export function SharedFile({ id }: { id?: string }) {
   const [file, setFile] = useState<PublicFile | null>(null)
@@ -32,6 +32,7 @@ export function SharedFile({ id }: { id?: string }) {
       <div className="eyebrow">SHARED WITH YOU</div><div className="public-file-icon"><FileGlyph object={file.object} size={44} /></div><h1>{file.object.key}</h1><p>{formatBytes(file.object.size)}<span className="share-meta-dot">·</span>{file.object.contentType}</p>
       <div className="public-file-actions"><a className="button dark" href={file.downloadUrl} download><Download size={16} />下载文件</a><button className="button" onClick={() => setPreview(true)}>在线预览<ArrowUpRight size={15} /></button></div>
       <div className="public-share-expiry"><Link2 size={14} />{file.expiresAt ? `分享有效至 ${formatDate(file.expiresAt, true)}` : '此分享长期有效'}</div>
+      {file.followUpdates && <p>可重复下载，文件更新后提供最新内容。</p>}
     </div> : null}
   </main><p className="public-share-bottom">简单存储，自由分享。</p>
     {preview && file && <Modal title={file.object.key} subtitle={formatBytes(file.object.size)} onClose={() => setPreview(false)} wide className="shared-file-viewer"><Preview bucket="" object={file.object} sourceUrl={file.previewUrl} metadataUrl={`/api/shares/${selectedId}`} onObjectChange={object => setFile(current => current ? { ...current, object } : current)} /><div className="modal-footer"><button className="button" onClick={() => setPreview(false)}>关闭</button><a className="button dark" href={file.downloadUrl} download><Download size={15} />下载文件</a></div></Modal>}

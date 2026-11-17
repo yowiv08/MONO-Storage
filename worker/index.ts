@@ -2,7 +2,7 @@ import { ApiError, SIMPLE_UPLOAD_LIMIT, PART_SIZE, MAX_OBJECT_SIZE, FOLDER_CONTE
 import { objectResponse } from './objects'
 import { appendObject } from './append'
 import { MIB, normalizeAppendMaxMiB } from '../shared/storage-limits.ts'
-import { createShare, currentShare, resolveShare, revokeShare, shareInfo } from './shares'
+import { createShare, currentShare, enableShareUpdates, resolveShare, revokeShare, shareInfo } from './shares'
 import { accessTokenInfo, assertTokenBucket, assertTokenPermission, createAccessToken, revokeAccessToken, tokenIsActive, updateAccessToken, validateTokenRegistry, type StoredAccessToken } from './access-tokens'
 import type { TokenPermission } from '../shared/token-permissions'
 import { mcpConnectionGuide, mcpInstructions } from '../shared/mcp-guide.ts'
@@ -353,7 +353,7 @@ async function page(request: Request, env: Env, url: URL): Promise<Response> {
   const shared = /^\/s\/([a-f0-9]{32})(\/file)?$/.exec(url.pathname)
   if (shared) {
     const { share, bucket } = await publicShare(env, shared[1], request, url)
-    return shared[2] ? objectResponse(request, bucket, share.key, url.searchParams.get('download') === 'true', share.objectVersion) : appPage(request, env)
+    return shared[2] ? objectResponse(request, bucket, share.key, url.searchParams.get('download') === 'true', share.followUpdates === true ? undefined : share.objectVersion) : appPage(request, env)
   }
   const config = await readStoredConfig(env)
   if (url.pathname !== '/' && (!config || url.pathname !== config.adminPath)) return notFound()
@@ -406,7 +406,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   const shareMatch = /^\/api\/shares\/([a-f0-9]{32})$/.exec(path)
   if (shareMatch && request.method === 'GET') {
     const { share, head } = await publicShare(env, shareMatch[1], request, url)
-    return json({ object: { ...serializeObject(head), key: share.key.split('/').pop(), metadata: {} }, expiresAt: share.expiresAt, previewUrl: `/s/${share.id}/file`, downloadUrl: `/s/${share.id}/file?download=true` })
+    return json({ object: { ...serializeObject(head), key: share.key.split('/').pop(), metadata: {} }, expiresAt: share.expiresAt, followUpdates: share.followUpdates === true, previewUrl: `/s/${share.id}/file`, downloadUrl: `/s/${share.id}/file?download=true` })
   }
   if (!hasCredentials(request)) throw new ApiError(401, 'UNAUTHORIZED', '需要有效的访问凭据。')
   const config = await authenticationConfig(env)
@@ -570,8 +570,17 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       authorize(principal, 'read', name, key)
       const head = await bucket.head(key)
       if (!head) throw new ApiError(404, 'OBJECT_NOT_FOUND', '文件不存在。')
-      const share = await createShare(primaryBucket(env), name, key, head, configFingerprint(config), body.expiresIn)
+      const share = await createShare(primaryBucket(env), name, key, head, configFingerprint(config), body.expiresIn, body.followUpdates)
       return json(shareInfo(share), 201)
+    }
+    if (request.method === 'PATCH') {
+      const body = await readJson(request)
+      const key = publicObjectKey(body.key)
+      authorize(principal, 'share', name, key)
+      authorize(principal, 'read', name, key)
+      if (body.followUpdates !== true || Object.keys(body).some(field => !['key', 'id', 'followUpdates'].includes(field))) throw new ApiError(400, 'INVALID_SHARE_MODE', '只支持为指定分享开启 followUpdates=true；其他设置请重新创建分享。')
+      if (!await bucket.head(key)) throw new ApiError(404, 'OBJECT_NOT_FOUND', '文件不存在。')
+      return json(shareInfo(await enableShareUpdates(primaryBucket(env), name, key, body.id, configFingerprint(config))))
     }
     const key = publicObjectKey(url.searchParams.get('key'))
     if (request.method === 'GET') {
@@ -634,6 +643,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       authorize(principal, 'delete', name, key)
       const existing = await bucket.head(key)
       if (!existing) throw new ApiError(404, 'OBJECT_NOT_FOUND', '文件不存在。')
+      await revokeShare(primaryBucket(env), name, key)
       await bucket.delete(key)
       return new Response(null, { status: 204 })
     }
@@ -652,6 +662,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       authorize(principal, 'delete_folder', name, key, true)
       const contents = await bucket.list({ prefix: key, limit: 2 })
       if (contents.truncated || contents.objects.some(item => item.key !== key)) throw new ApiError(409, 'FOLDER_NOT_EMPTY', '请先删除文件夹中的文件，再删除文件夹。')
+      await revokeShare(primaryBucket(env), name, key)
       await bucket.delete(key)
       return new Response(null, { status: 204 })
     }
@@ -662,6 +673,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     if (!Array.isArray(body.keys) || body.keys.length < 1 || body.keys.length > 100) throw new ApiError(400, 'INVALID_KEYS', '每次可删除 1 到 100 个文件。')
     const keys = body.keys.map(key => publicObjectKey(key))
     for (const key of keys) authorize(principal, 'delete', name, key)
+    for (const key of new Set(keys)) await revokeShare(primaryBucket(env), name, key)
     await bucket.delete(keys)
     return json({ deleted: keys.length })
   }

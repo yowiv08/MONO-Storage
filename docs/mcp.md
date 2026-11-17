@@ -47,6 +47,7 @@ MCP 普通读写单次最多 1 MiB；读取默认 64 KiB，可按 nextOffset 继
 | 创建目录 | POST /api/buckets/{bucket}/folders，JSON {"key":"目录/"} | create_folder |
 | 删除空目录 | DELETE /api/buckets/{bucket}/folders?key=目录%2F | delete_folder |
 | 创建分享 | POST /api/buckets/{bucket}/shares，JSON {"key":"完整路径","expiresIn":604800} | read + share |
+| 保持原链接并跟随更新 | PATCH /api/buckets/{bucket}/shares，JSON {"key":"完整路径","id":"分享编号","followUpdates":true} | read + share |
 | 查看或撤销分享 | GET 或 DELETE /api/buckets/{bucket}/shares?key=… | share |
 
 列表返回 objects、folders、truncated 和 cursor。truncated=true 时继续使用 cursor；不要假定第一页就是全部。
@@ -54,7 +55,9 @@ MCP 普通读写单次最多 1 MiB；读取默认 64 KiB，可按 nextOffset 继
 原 HTTP API 简单上传上限 90 MiB，PUT 请求体为原始文件字节，设置对应 Content-Type；元数据通过 X-Object-Meta-* 请求头传递。
 追加接口将请求正文原样接到文件末尾，保留原内容、Content-Type 和自定义元数据，不自动插入换行，也不解析或合并 JSON、PDF、Excel 等结构化文件。适用于日志、Markdown、文本和按行构造的 CSV；需要换行时在新增内容中明确包含换行符。
 追加请求必须带 Content-Length（新增内容的字节数，非字符数），正文不能为空，追加后的完整文件上限由后台“设置 → 文件追加”配置，默认 90 MiB，可设置 1–5115 MiB。单次 HTTP 请求仍受部署平台的请求大小限制，大内容可分多次追加。默认只追加已有文件；create=true 允许文件不存在时创建，Content-Type 仅在创建时使用。追加只需 write 权限，不要求 read 权限；单文件 Token 只能追加绑定文件。
-成功返回 key、size（追加后的总字节数）、etag、appendedBytes 和 created，已有文件返回 200，新建文件返回 201。可传 If-Match 限定文件 ETag；并发变化返回 409 APPEND_CONFLICT，表示本次内容未写入，可在核对后重新追加。不要因网络超时盲目重发，追加不是幂等操作；可使用已知的 If-Match 避免同一版本重复写入。文件内容变化后，已有分享链接失效。
+成功返回 key、size（追加后的总字节数）、etag、appendedBytes 和 created，已有文件返回 200，新建文件返回 201。可传 If-Match 限定文件 ETag；并发变化返回 409 APPEND_CONFLICT，表示本次内容未写入，可在核对后重新追加。不要因网络超时盲目重发，追加不是幂等操作；可使用已知的 If-Match 避免同一版本重复写入。文件内容变化后，绑定当前版本的分享链接失效；followUpdates=true 的分享继续提供最新内容。
+
+分享链接可重复下载。HTTP API 和 MCP 的 mono_create_share 均支持 followUpdates，默认为 false；只有明确需要公开该路径以后的内容时才传 true。PATCH 只为指定的当前分享开启跟随更新，保留编号和到期时间，不能恢复已过期、已撤销、已被替换或管理员密钥已轮换的分享。通过文件 API 删除文件会撤销分享，同名文件重建不会恢复旧链接；直接操作底层存储前请主动取消相应分享。
 读取支持 Range: bytes=start-end、HEAD 和 If-None-Match。metadata=true 返回 JSON，其中 etag 可用于条件覆盖。
 打包下载最多选择 500 个文件，原始文件总大小不超过 512 MiB；请求 JSON 最多 1 MiB。ZIP 保留完整相对目录结构，对解压不兼容的文件名字符使用百分号转义；单文件 Token 只能打包绑定文件。文件缺失、版本变化或路径发生解压冲突时返回错误；传输失败时应丢弃未完成的压缩包。该功能通过原 HTTP API 调用。
 文件路径不能以 / 开头，目录必须以 / 结尾，不接受空目录、.、.. 或受保护的 _mono/ 系统路径。

@@ -1,5 +1,5 @@
 import { ApiError, hashSecret, objectKey } from './core.ts'
-import { shareInfo, shareIsActive, type ShareRecord } from './shares.ts'
+import { sameShare, shareInfo, shareIsActive, shareMatchesObject, type ShareRecord } from './shares.ts'
 
 export type ActiveShare = ReturnType<typeof shareInfo> & {
   bucket: string
@@ -30,7 +30,8 @@ function parseShare(value: unknown): ShareRecord | null {
     || typeof record.fingerprint !== 'string' || !record.fingerprint || record.fingerprint.length > 512 || /[\x00-\x1f\x7f]/.test(record.fingerprint)
     || typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt))
     || (record.expiresAt !== null && (typeof record.expiresAt !== 'string' || !Number.isFinite(Date.parse(record.expiresAt))))
-    || typeof record.revoked !== 'boolean') return null
+    || typeof record.revoked !== 'boolean'
+    || (record.followUpdates !== undefined && typeof record.followUpdates !== 'boolean')) return null
   try { objectKey(record.key) } catch { return null }
   return record as ShareRecord
 }
@@ -53,14 +54,12 @@ async function activeShare(storage: R2Bucket, listed: R2Object, getBucket: (name
   const share = await readShare(storage, listed.key)
   if (!share || share.id !== match[1] || !allowedBuckets.has(share.bucket) || !shareIsActive(share, fingerprint)) return null
   const current = await readShare(storage, `_mono/shares/objects/${await hashSecret(`${share.bucket}\n${share.key}`)}.json`)
-  if (!current || current.id !== share.id || current.bucket !== share.bucket || current.key !== share.key
-    || current.objectVersion !== share.objectVersion || current.createdAt !== share.createdAt || current.expiresAt !== share.expiresAt
-    || !shareIsActive(current, fingerprint)) return null
+  if (!current || !sameShare(share, current) || !shareIsActive(current, fingerprint)) return null
   const head = await getBucket(share.bucket).head(share.key)
-  if (!head || head.version !== share.objectVersion) return null
+  if (!head || !shareMatchesObject(current, head)) return null
   if (head.key !== share.key || !Number.isSafeInteger(head.size) || head.size < 0 || !Number.isFinite(head.uploaded.getTime())) throw new ApiError(503, 'INVALID_SHARE_STORAGE', '分享文件响应无效。')
   if (!shareIsActive(share, fingerprint)) return null
-  return { ...shareInfo(share), bucket: share.bucket, key: share.key, size: head.size, contentType: head.httpMetadata?.contentType || 'application/octet-stream', uploaded: head.uploaded.toISOString() }
+  return { ...shareInfo(current), bucket: share.bucket, key: share.key, size: head.size, contentType: head.httpMetadata?.contentType || 'application/octet-stream', uploaded: head.uploaded.toISOString() }
 }
 
 export async function listActiveSharesPage(primary: R2Bucket, getBucket: (name: string) => R2Bucket, allowedBucketNames: readonly string[], fingerprint: string, cursor?: string): Promise<ActiveSharesPage> {

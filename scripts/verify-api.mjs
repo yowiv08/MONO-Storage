@@ -151,8 +151,8 @@ try {
     assert.equal(invalid.status, 416)
   })
   const shares = `${base}/shares?${new URLSearchParams({ key })}`
-  const createShare = async (expiresIn = 3600, shareKey = key) => {
-    const result = await call(`${base}/shares`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: shareKey, expiresIn }) })
+  const createShare = async (expiresIn = 3600, shareKey = key, followUpdates = false) => {
+    const result = await call(`${base}/shares`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: shareKey, expiresIn, followUpdates }) })
     assert.equal(result.status, 201, await result.clone().text())
     sharedKeys.add(shareKey)
     return result.json()
@@ -212,6 +212,86 @@ try {
     assert.equal((await call(`${object(key)}&overwrite=true`, { method: 'PUT', body: 'hello-世界' })).status, 201)
     assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
     assert.equal((await call(shares).then(r => r.json())).share, null)
+  })
+  await check('Following shares support repeated download, HEAD, Range and fresh metadata after append and overwrite', async () => {
+    const fileKey = root + 'following.txt'
+    tracked.add(fileKey)
+    assert.equal((await call(object(fileKey), { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'first' })).status, 201)
+    const share = await createShare(null, fileKey, true)
+    assert.equal(share.followUpdates, true)
+    let content = 'first'
+    for (const change of ['read', 'append', 'overwrite']) {
+      if (change === 'append') {
+        assert.equal((await call(`${base}/object/append?${new URLSearchParams({ key: fileKey })}`, { method: 'POST', body: '\n追加内容' })).status, 200)
+        content += '\n追加内容'
+      }
+      if (change === 'overwrite') {
+        content = 'latest 最新内容'
+        assert.equal((await call(`${object(fileKey)}&overwrite=true`, { method: 'PUT', body: content })).status, 201)
+      }
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const download = await fetch(`${origin}${share.url}/file?download=true`)
+        assert.equal(download.status, 200)
+        assert.equal(await download.text(), content)
+      }
+      const metadata = await fetch(`${origin}/api/shares/${share.id}`).then(response => response.json())
+      assert.equal(metadata.followUpdates, true)
+      assert.equal(metadata.object.size, Buffer.byteLength(content))
+      const head = await fetch(`${origin}${share.url}/file?download=true`, { method: 'HEAD' })
+      assert.equal(head.status, 200)
+      assert.equal(Number(head.headers.get('Content-Length')), Buffer.byteLength(content))
+      const range = await fetch(`${origin}${share.url}/file`, { headers: { Range: 'bytes=0-4' } })
+      assert.equal(range.status, 206)
+      assert.equal(await range.text(), content.slice(0, 5))
+      const listed = await call(`${origin}/api/shares`).then(response => response.json())
+      assert.ok(listed.shares.some(item => item.id === share.id && item.followUpdates && item.size === Buffer.byteLength(content)))
+    }
+  })
+  await check('An explicit stale-link upgrade keeps its URL and deadline and rejects replacement IDs or extra changes', async () => {
+    const fileKey = root + 'upgrade.txt'
+    tracked.add(fileKey)
+    assert.equal((await call(object(fileKey), { method: 'PUT', body: 'v1' })).status, 201)
+    const share = await createShare(3600, fileKey)
+    assert.equal((await call(`${object(fileKey)}&overwrite=true`, { method: 'PUT', body: 'v2' })).status, 201)
+    assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
+    const patch = { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Mono-Client': 'web' }, body: JSON.stringify({ key: fileKey, id: share.id, followUpdates: true }) }
+    assert.equal((await fetch(`${base}/shares`, patch)).status, 401)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const updated = await call(`${base}/shares`, patch)
+      assert.equal(updated.status, 200)
+      assert.deepEqual(await updated.json(), { ...share, followUpdates: true })
+      assert.equal(await fetch(`${origin}${share.url}/file`).then(response => response.text()), 'v2')
+    }
+    for (const extra of [{ followUpdates: false }, { expiresIn: null }, { followUpdates: 'true' }]) {
+      assert.equal((await call(`${base}/shares`, { ...patch, body: JSON.stringify({ key: fileKey, id: share.id, followUpdates: true, ...extra }) })).status, 400)
+    }
+    const replacement = await createShare(null, fileKey, true)
+    assert.notEqual(replacement.id, share.id)
+    assert.equal((await call(`${base}/shares`, patch)).status, 409)
+    assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
+  })
+  await check('Following shares still expire and can be revoked without being reactivated', async () => {
+    const fileKey = root + 'following.txt'
+    for (const reason of ['revoke', 'expire']) {
+      const share = await createShare(reason === 'expire' ? 1 : null, fileKey, true)
+      if (reason === 'expire') await new Promise(resolve => setTimeout(resolve, Math.max(0, Date.parse(share.expiresAt) - Date.now()) + 30))
+      else assert.equal((await call(`${base}/shares?${new URLSearchParams({ key: fileKey })}`, { method: 'DELETE' })).status, 204)
+      assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
+      assert.equal((await call(`${base}/shares`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: fileKey, id: share.id, followUpdates: true }) })).status, 404)
+    }
+  })
+  await check('Single and batch file deletion revoke following links before same-path recreation', async () => {
+    for (const mode of ['single', 'batch']) {
+      const fileKey = root + `deleted-${mode}.txt`
+      tracked.add(fileKey)
+      assert.equal((await call(object(fileKey), { method: 'PUT', body: 'old' })).status, 201)
+      const share = await createShare(null, fileKey, true)
+      const deletion = mode === 'single' ? await call(object(fileKey), { method: 'DELETE' }) : await call(`${base}/objects`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys: [fileKey] }) })
+      assert.equal(deletion.status, mode === 'single' ? 204 : 200)
+      assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
+      assert.equal((await call(object(fileKey), { method: 'PUT', body: 'new unrelated contents' })).status, 201)
+      assert.equal((await fetch(`${origin}${share.url}/file`)).status, 404)
+    }
   })
   await check('Reject duplicate upload, allow explicit overwrite', async () => {
     const duplicate = await call(object(key), { method: 'PUT', body: 'wrong' })

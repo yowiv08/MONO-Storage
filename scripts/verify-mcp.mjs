@@ -559,6 +559,7 @@ try {
     const share = await ok(sharer, 'mono_create_share', { key: targetKey, expiresIn: 3600 })
     shares.add(targetKey)
     assert.match(share.id, /^[a-f0-9]{32}$/)
+    assert.equal(share.followUpdates, false)
     assert.equal(new URL(share.absoluteUrl).origin, origin)
     await expect(await api(`/api/shares/${share.id}`, null), 200)
     const current = await ok(shareManager, 'mono_get_share', { key: targetKey })
@@ -566,6 +567,29 @@ try {
     await denied(reader, 'mono_revoke_share', { key: targetKey }, 400)
     await ok(shareManager, 'mono_revoke_share', { key: targetKey })
     await expect(await api(`/api/shares/${share.id}`, null), 404)
+  })
+
+  await check('Following shares through MCP preserve repeated downloads and changing a share mode requires read plus share', async () => {
+    const pinned = await ok(sharer, 'mono_create_share', { key: targetKey, expiresIn: null })
+    const update = { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: targetKey, id: pinned.id, followUpdates: true }) }
+    await expect(await api(path(bucket, 'shares'), readToken.secret, update), 403)
+    await expect(await api(path(bucket, 'shares'), shareOnly.secret, update), 403)
+    await expect(await api(path(otherBucket, 'shares'), readShare.secret, update), 403)
+    await expect(await api(path(bucket, 'shares'), readShare.secret, update), 200)
+    await denied(sharer, 'mono_create_share', { key: targetKey, followUpdates: 'true' }, 400)
+    const share = await ok(sharer, 'mono_create_share', { key: targetKey, expiresIn: null, followUpdates: true })
+    assert.equal(share.followUpdates, true)
+    assert.equal(share.expiresAt, null)
+    await expect(await api(`/api/shares/${pinned.id}`, null), 404)
+    for (const content of ['updated through MCP 中文', text]) {
+      await ok(writer, 'mono_write_text', { key: targetKey, content, overwrite: true })
+      for (let attempt = 0; attempt < 2; attempt++) assert.equal(await (await expect(await api(`${share.url}/file?download=true`, null), 200)).text(), content)
+    }
+    const current = await ok(shareManager, 'mono_get_share', { key: targetKey })
+    assert.equal(current.share.id, share.id)
+    assert.equal(current.share.followUpdates, true)
+    await ok(shareManager, 'mono_revoke_share', { key: targetKey })
+    await expect(await api(`${share.url}/file`, null), 404)
   })
 
   await check('Multipart uploads cross the JSON part threshold, keep credential ownership, complete and abort cleanly', async () => {

@@ -9,6 +9,7 @@ export type ManagedShare = {
   url: string
   createdAt: string
   expiresAt: string | null
+  followUpdates: boolean
   bucket: string
   key: string
   size: number
@@ -105,7 +106,7 @@ export function ShareManager({ buckets, notify, onOpenFile }: ShareManagerProps)
         {!visible.length ? <div className="share-manager-empty"><Link2 size={31} /><h3>{query ? '已读取的分享中没有匹配项' : listing?.truncated ? '这页暂时没有有效分享' : '还没有有效的分享链接'}</h3><p>{query ? '可以调整搜索，或加载更多分享后继续查找。' : listing?.truncated ? '继续加载，查看后续的分享记录。' : '在文件的“更多”菜单或预览窗口中创建分享。'}</p></div> : <div className="share-manager-list">{visible.map(share => <article className="share-manager-item" key={share.id}>
           <div className="share-manager-file"><span className="share-manager-file-icon"><File size={22} strokeWidth={1.5} /></span><div><button className="share-manager-file-name" type="button" title={share.key} onClick={() => onOpenFile(share.bucket, share.key)}>{baseName(share.key)}<ArrowUpRight size={14} /></button><p className="share-manager-path">{share.key}</p><div className="share-manager-meta"><span title={buckets.find(bucket => bucket.name === share.bucket)?.description || share.bucket}>{share.bucket}</span><span>{formatBytes(share.size)}</span><span>{share.contentType}</span></div></div></div>
           <div className="share-manager-link"><a href={shareUrl(share)} target="_blank" rel="noreferrer">{shareUrl(share)}</a><button className="icon-button" type="button" aria-label={`复制 ${baseName(share.key)} 的分享链接`} onClick={() => copyLink(share)}>{copied === share.id ? <Check size={16} /> : <Copy size={16} />}</button></div>
-          <div className="share-manager-item-footer"><div><span>{share.expiresAt ? `有效至 ${formatDate(share.expiresAt, true)}` : '长期有效'}</span><span>创建于 {formatDate(share.createdAt, true)}</span></div><div className="share-manager-actions"><a className="text-button" href={shareUrl(share)} target="_blank" rel="noreferrer">打开分享<ArrowUpRight size={14} /></a><button className="text-button share-manager-cancel" type="button" disabled={cancelBusy || loadingMore} onClick={() => { setCancelShare(share); setCancelError('') }}>取消分享</button></div></div>
+          <div className="share-manager-item-footer"><div><span>{share.expiresAt ? `有效至 ${formatDate(share.expiresAt, true)}` : '长期有效'}</span><span>{share.followUpdates ? '跟随文件更新' : '仅当前版本'}</span><span>创建于 {formatDate(share.createdAt, true)}</span></div><div className="share-manager-actions"><a className="text-button" href={shareUrl(share)} target="_blank" rel="noreferrer">打开分享<ArrowUpRight size={14} /></a><button className="text-button share-manager-cancel" type="button" disabled={cancelBusy || loadingMore} onClick={() => { setCancelShare(share); setCancelError('') }}>取消分享</button></div></div>
         </article>)}</div>}
         {moreError && <p className="share-manager-page-error form-error" role="alert"><AlertCircle size={16} />{moreError}</p>}
         <div className="share-manager-footer"><span>{listing?.truncated ? '还有更多分享记录' : '已读取全部有效分享'}</span>{listing?.truncated && <button className="button" type="button" disabled={loadingMore || cancelBusy} onClick={loadMore}>{loadingMore ? <LoaderCircle size={15} className="spin" /> : <ArrowDown size={15} />}{loadingMore ? '正在加载' : moreError ? '重试加载更多' : '加载更多'}</button>}</div>
